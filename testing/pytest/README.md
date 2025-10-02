@@ -150,6 +150,7 @@ def test_assertions():
     assert True
     assert not False
     
+    
     # Проверка вхождения
     assert 'hello' in 'hello world'
     
