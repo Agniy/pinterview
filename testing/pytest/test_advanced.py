@@ -11,7 +11,7 @@ import pytest
 import asyncio
 import time
 from unittest.mock import Mock, MagicMock, patch, mock_open
-from advanced_examples import (
+from .advanced_examples import (
     Database, Cache, APIClient, EventManager,
     async_fetch_data, async_process_batch,
     FileProcessor, RateLimiter, Validator

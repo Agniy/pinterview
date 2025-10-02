@@ -9,7 +9,7 @@
 """
 
 import pytest
-from basics import (
+from .basics import (
     Calculator, User, ShoppingCart,
     validate_password, is_palindrome,
     fibonacci, factorial

@@ -8,7 +8,7 @@ conftest.py - Файл с общими фикстурами для всех те
 import pytest
 import tempfile
 import os
-from advanced_examples import Database, Cache
+from .advanced_examples import Database, Cache
 
 
 # ============= Фикстуры для базы данных =============
