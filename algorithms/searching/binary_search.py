@@ -354,6 +354,16 @@ def demonstrate_binary_search():
 # АНАЛИЗ ПРОИЗВОДИТЕЛЬНОСТИ
 # ============================================================================
 
+def linear_search(arr, target):
+    """
+    Линейный поиск для сравнения производительности
+    """
+    for i in range(len(arr)):
+        if arr[i] == target:
+            return i
+    return -1
+
+
 def performance_analysis():
     """
     Анализ производительности
@@ -377,12 +387,12 @@ def performance_analysis():
         
         # Линейный поиск
         start = time.time()
-        linear_search([i for i in range(size)], size - 1)
+        linear_search(arr, target)
         linear_time = time.time() - start
         
         # Бинарный поиск
         start = time.time()
-        binary_search([i for i in range(size)], size - 1)
+        binary_search(arr, target)
         binary_time = time.time() - start
         
         speedup = linear_time / binary_time if binary_time > 0 else 0
