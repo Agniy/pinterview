@@ -7,6 +7,7 @@ import asyncio
 import time
 import aiohttp
 from typing import List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 
 # 1. Базовый async/await
@@ -214,6 +215,151 @@ async def event_example():
     await asyncio.gather(*waiters)
 
 
+# 11. Выполнение в thread pool с run_in_executor
+def blocking_io_operation(n: int) -> int:
+    """Блокирующая I/O операция (например, чтение файла или запрос к БД)"""
+    print(f"Запуск блокирующей операции {n} в потоке")
+    time.sleep(1)  # Имитация блокирующей операции
+    result = n * 2
+    print(f"Операция {n} завершена, результат: {result}")
+    return result
+
+
+async def run_in_thread_pool_example():
+    """Демонстрация выполнения блокирующих операций в thread pool"""
+    loop = asyncio.get_event_loop()
+    
+    # Создаем executor с 3 потоками
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # Запускаем блокирующие операции параллельно в разных потоках
+        tasks = [
+            loop.run_in_executor(executor, blocking_io_operation, i)
+            for i in range(5)
+        ]
+        
+        start_time = time.time()
+        results = await asyncio.gather(*tasks)
+        elapsed_time = time.time() - start_time
+        
+        print(f"Результаты: {results}")
+        print(f"Время выполнения с ThreadPool (3 потока): {elapsed_time:.2f}с")
+
+
+# 12. Выполнение CPU-intensive задач в process pool
+def cpu_intensive_task(n: int) -> int:
+    """CPU-интенсивная задача (например, вычисления)"""
+    print(f"Запуск CPU-задачи {n} в процессе")
+    # Имитация тяжелых вычислений
+    result = sum(i * i for i in range(n))
+    print(f"CPU-задача {n} завершена")
+    return result
+
+
+async def run_in_process_pool_example():
+    """Демонстрация выполнения CPU-intensive задач в process pool"""
+    loop = asyncio.get_event_loop()
+    
+    # Создаем process pool
+    with ProcessPoolExecutor(max_workers=2) as executor:
+        # Запускаем CPU-интенсивные задачи в разных процессах
+        tasks = [
+            loop.run_in_executor(executor, cpu_intensive_task, 1000000 * (i + 1))
+            for i in range(4)
+        ]
+        
+        start_time = time.time()
+        results = await asyncio.gather(*tasks)
+        elapsed_time = time.time() - start_time
+        
+        print(f"Результаты CPU-задач: {[f'{r:,}' for r in results]}")
+        print(f"Время выполнения с ProcessPool: {elapsed_time:.2f}с")
+
+
+# 13. Использование default executor (None)
+async def default_executor_example():
+    """Демонстрация использования default executor"""
+    loop = asyncio.get_event_loop()
+    
+    # Использование default executor (передаем None или не передаем executor вообще)
+    # Default executor - это ThreadPoolExecutor
+    tasks = [
+        loop.run_in_executor(None, blocking_io_operation, i)
+        for i in range(3)
+    ]
+    
+    results = await asyncio.gather(*tasks)
+    print(f"Результаты с default executor: {results}")
+
+
+# 14. Сравнение производительности: синхронный vs thread pool
+async def performance_comparison():
+    """Сравнение производительности синхронного и асинхронного выполнения"""
+    loop = asyncio.get_event_loop()
+    
+    # Синхронное выполнение
+    print("=== Синхронное выполнение ===")
+    start_time = time.time()
+    sync_results = [blocking_io_operation(i) for i in range(5)]
+    sync_time = time.time() - start_time
+    print(f"Синхронное время: {sync_time:.2f}с\n")
+    
+    # Асинхронное выполнение с ThreadPoolExecutor
+    print("=== Асинхронное выполнение (ThreadPool) ===")
+    start_time = time.time()
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        async_tasks = [
+            loop.run_in_executor(executor, blocking_io_operation, i)
+            for i in range(5)
+        ]
+        async_results = await asyncio.gather(*async_tasks)
+    async_time = time.time() - start_time
+    print(f"Асинхронное время: {async_time:.2f}с")
+    
+    print(f"\nУскорение: {sync_time/async_time:.2f}x")
+
+
+# 15. Практический пример: параллельная обработка файлов
+def process_file(filename: str) -> Dict[str, Any]:
+    """Блокирующая обработка файла"""
+    print(f"Обработка файла: {filename}")
+    time.sleep(0.5)  # Имитация чтения и обработки файла
+    
+    # Имитация результата обработки
+    return {
+        "filename": filename,
+        "size": len(filename) * 1024,
+        "lines": len(filename) * 100,
+        "processed": True
+    }
+
+
+async def parallel_file_processing():
+    """Параллельная обработка множества файлов"""
+    loop = asyncio.get_event_loop()
+    files = [f"file_{i}.txt" for i in range(10)]
+    
+    print("Начинаем параллельную обработку файлов...")
+    
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        start_time = time.time()
+        
+        # Создаем задачи для параллельной обработки
+        tasks = [
+            loop.run_in_executor(executor, process_file, filename)
+            for filename in files
+        ]
+        
+        # Ожидаем завершения всех задач
+        results = await asyncio.gather(*tasks)
+        
+        elapsed_time = time.time() - start_time
+        
+        print(f"\nОбработано файлов: {len(results)}")
+        print(f"Общий размер: {sum(r['size'] for r in results):,} байт")
+        print(f"Общее количество строк: {sum(r['lines'] for r in results):,}")
+        print(f"Время обработки: {elapsed_time:.2f}с")
+
+
 # Функция для запуска всех примеров
 async def run_all_examples():
     """Запуск всех базовых примеров"""
@@ -253,6 +399,26 @@ async def run_all_examples():
     
     print("9. Event:")
     await event_example()
+    print()
+    
+    print("10. run_in_executor - ThreadPool:")
+    await run_in_thread_pool_example()
+    print()
+    
+    print("11. run_in_executor - ProcessPool:")
+    await run_in_process_pool_example()
+    print()
+    
+    print("12. Default executor:")
+    await default_executor_example()
+    print()
+    
+    print("13. Сравнение производительности:")
+    await performance_comparison()
+    print()
+    
+    print("14. Параллельная обработка файлов:")
+    await parallel_file_processing()
     print()
 
 

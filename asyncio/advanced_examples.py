@@ -10,6 +10,9 @@ from typing import List, Dict, Any, Optional, Callable, AsyncGenerator
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
 import logging
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import hashlib
+import json
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -451,6 +454,304 @@ async def batch_iterator_example():
         logger.info(f"Обработка батча: {batch}")
 
 
+# 9. Продвинутое использование run_in_executor с адаптивным управлением
+class AdaptiveExecutorManager:
+    """
+    Менеджер для адаптивного управления executor'ами
+    Автоматически выбирает ThreadPool или ProcessPool в зависимости от типа задачи
+    """
+    
+    def __init__(self, thread_workers: int = 4, process_workers: int = 2):
+        self.thread_pool = ThreadPoolExecutor(max_workers=thread_workers)
+        self.process_pool = ProcessPoolExecutor(max_workers=process_workers)
+        self._stats = {
+            'thread_tasks': 0,
+            'process_tasks': 0,
+            'errors': 0
+        }
+    
+    async def run_io_task(self, func: Callable, *args, **kwargs):
+        """Выполнение I/O задачи в thread pool"""
+        loop = asyncio.get_event_loop()
+        try:
+            self._stats['thread_tasks'] += 1
+            result = await loop.run_in_executor(self.thread_pool, lambda: func(*args, **kwargs))
+            return result
+        except Exception as e:
+            self._stats['errors'] += 1
+            logger.error(f"Ошибка в I/O задаче: {e}")
+            raise
+    
+    async def run_cpu_task(self, func: Callable, *args, **kwargs):
+        """Выполнение CPU-intensive задачи в process pool"""
+        loop = asyncio.get_event_loop()
+        try:
+            self._stats['process_tasks'] += 1
+            result = await loop.run_in_executor(self.process_pool, lambda: func(*args, **kwargs))
+            return result
+        except Exception as e:
+            self._stats['errors'] += 1
+            logger.error(f"Ошибка в CPU задаче: {e}")
+            raise
+    
+    def get_stats(self) -> Dict[str, int]:
+        """Получение статистики выполнения"""
+        return self._stats.copy()
+    
+    def shutdown(self):
+        """Корректное завершение работы executor'ов"""
+        self.thread_pool.shutdown(wait=True)
+        self.process_pool.shutdown(wait=True)
+        logger.info("Все executor'ы остановлены")
+
+
+# 10. Гибридная асинхронная обработка данных
+@dataclass
+class DataChunk:
+    """Чанк данных для обработки"""
+    id: int
+    data: bytes
+    metadata: Dict[str, Any]
+
+
+def compute_hash(data: bytes) -> str:
+    """CPU-intensive: вычисление хеша данных"""
+    return hashlib.sha256(data).hexdigest()
+
+
+def compress_data(data: bytes) -> bytes:
+    """CPU-intensive: сжатие данных (имитация)"""
+    time.sleep(0.1)  # Имитация CPU работы
+    # В реальности здесь был бы zlib.compress или подобное
+    return data[:len(data)//2]  # Имитация сжатия
+
+
+def save_to_disk(filename: str, data: bytes) -> bool:
+    """I/O blocking: сохранение на диск"""
+    time.sleep(0.2)  # Имитация записи на диск
+    logger.info(f"Сохранено {len(data)} байт в {filename}")
+    return True
+
+
+async def process_data_chunk(
+    executor_manager: AdaptiveExecutorManager,
+    chunk: DataChunk
+) -> Dict[str, Any]:
+    """
+    Комплексная обработка чанка данных с использованием разных executor'ов
+    Демонстрирует паттерн смешивания CPU и I/O операций
+    """
+    logger.info(f"Обработка чанка {chunk.id}")
+    
+    # 1. CPU-intensive: вычисление хеша в процессе
+    hash_value = await executor_manager.run_cpu_task(compute_hash, chunk.data)
+    
+    # 2. CPU-intensive: сжатие данных в процессе
+    compressed = await executor_manager.run_cpu_task(compress_data, chunk.data)
+    
+    # 3. I/O blocking: сохранение на диск в потоке
+    filename = f"chunk_{chunk.id}_{hash_value[:8]}.dat"
+    saved = await executor_manager.run_io_task(save_to_disk, filename, compressed)
+    
+    # 4. Возврат метаданных (асинхронная операция)
+    await asyncio.sleep(0.01)  # Имитация async операции
+    
+    return {
+        'id': chunk.id,
+        'hash': hash_value,
+        'original_size': len(chunk.data),
+        'compressed_size': len(compressed),
+        'compression_ratio': len(compressed) / len(chunk.data),
+        'saved': saved,
+        'filename': filename
+    }
+
+
+# 11. Динамическое масштабирование executor'ов
+class DynamicExecutorPool:
+    """
+    Пул executor'ов с динамическим масштабированием
+    Подстраивается под нагрузку
+    """
+    
+    def __init__(self, min_workers: int = 2, max_workers: int = 10):
+        self.min_workers = min_workers
+        self.max_workers = max_workers
+        self.current_workers = min_workers
+        self._executor = ThreadPoolExecutor(max_workers=min_workers)
+        self._pending_tasks = 0
+        self._lock = asyncio.Lock()
+    
+    async def execute(self, func: Callable, *args, **kwargs):
+        """Выполнение задачи с автомасштабированием"""
+        async with self._lock:
+            self._pending_tasks += 1
+            await self._adjust_pool_size()
+        
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(self._executor, lambda: func(*args, **kwargs))
+            return result
+        finally:
+            async with self._lock:
+                self._pending_tasks -= 1
+                await self._adjust_pool_size()
+    
+    async def _adjust_pool_size(self):
+        """Автоматическая настройка размера пула"""
+        # Простая эвристика: 1 worker на 2 pending задачи
+        desired_workers = min(
+            max(self.min_workers, self._pending_tasks // 2),
+            self.max_workers
+        )
+        
+        if desired_workers != self.current_workers:
+            logger.info(f"Масштабирование пула: {self.current_workers} -> {desired_workers} workers")
+            # В реальности пришлось бы создавать новый executor
+            # Здесь упрощенная версия
+            self.current_workers = desired_workers
+    
+    def shutdown(self):
+        """Остановка пула"""
+        self._executor.shutdown(wait=True)
+
+
+# 12. Обработка с таймаутами и retry в executor
+async def resilient_executor_call(
+    func: Callable,
+    *args,
+    timeout: float = 5.0,
+    max_retries: int = 3,
+    executor: Optional[ThreadPoolExecutor] = None,
+    **kwargs
+):
+    """
+    Устойчивый вызов функции в executor с таймаутом и повторами
+    """
+    loop = asyncio.get_event_loop()
+    
+    for attempt in range(max_retries):
+        try:
+            # Запускаем в executor с таймаутом
+            task = loop.run_in_executor(executor, lambda: func(*args, **kwargs))
+            result = await asyncio.wait_for(task, timeout=timeout)
+            
+            logger.info(f"Успешное выполнение с попытки {attempt + 1}")
+            return result
+            
+        except asyncio.TimeoutError:
+            logger.warning(f"Попытка {attempt + 1}: таймаут после {timeout}с")
+            if attempt == max_retries - 1:
+                raise Exception(f"Превышен таймаут после {max_retries} попыток")
+        
+        except Exception as e:
+            logger.warning(f"Попытка {attempt + 1}: ошибка {e}")
+            if attempt == max_retries - 1:
+                raise
+        
+        # Экспоненциальная задержка перед повтором
+        await asyncio.sleep(2 ** attempt)
+
+
+# Примеры использования продвинутых run_in_executor паттернов
+async def adaptive_executor_example():
+    """Демонстрация адаптивного менеджера executor'ов"""
+    manager = AdaptiveExecutorManager(thread_workers=3, process_workers=2)
+    
+    # Создаем тестовые данные
+    chunks = [
+        DataChunk(
+            id=i,
+            data=(f"Test data chunk {i} " * 100).encode(),
+            metadata={'source': f'source_{i}'}
+        )
+        for i in range(5)
+    ]
+    
+    try:
+        # Параллельная обработка всех чанков
+        logger.info("Начало обработки данных...")
+        start_time = time.time()
+        
+        tasks = [process_data_chunk(manager, chunk) for chunk in chunks]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        elapsed_time = time.time() - start_time
+        
+        # Вывод результатов
+        successful_results = [r for r in results if not isinstance(r, Exception)]
+        logger.info(f"\n=== Результаты обработки ===")
+        logger.info(f"Обработано чанков: {len(successful_results)}/{len(chunks)}")
+        logger.info(f"Время обработки: {elapsed_time:.2f}с")
+        
+        if successful_results:
+            avg_compression = sum(r['compression_ratio'] for r in successful_results) / len(successful_results)
+            logger.info(f"Средний коэффициент сжатия: {avg_compression:.2%}")
+        
+        # Статистика executor'ов
+        stats = manager.get_stats()
+        logger.info(f"\n=== Статистика executor'ов ===")
+        logger.info(f"Thread pool задач: {stats['thread_tasks']}")
+        logger.info(f"Process pool задач: {stats['process_tasks']}")
+        logger.info(f"Ошибок: {stats['errors']}")
+        
+    finally:
+        manager.shutdown()
+
+
+async def dynamic_pool_example():
+    """Демонстрация динамического масштабирования"""
+    pool = DynamicExecutorPool(min_workers=2, max_workers=8)
+    
+    def slow_task(task_id: int) -> int:
+        time.sleep(0.5)
+        return task_id * 2
+    
+    try:
+        # Запускаем 20 задач, пул должен автоматически масштабироваться
+        logger.info("Запуск задач с автомасштабированием...")
+        tasks = [pool.execute(slow_task, i) for i in range(20)]
+        results = await asyncio.gather(*tasks)
+        logger.info(f"Обработано {len(results)} задач")
+    finally:
+        pool.shutdown()
+
+
+async def resilient_call_example():
+    """Демонстрация устойчивого вызова с таймаутом и retry"""
+    
+    def unreliable_blocking_task(task_id: int) -> str:
+        """Ненадежная блокирующая задача"""
+        delay = random.uniform(0.1, 3.0)
+        time.sleep(delay)
+        
+        if random.random() < 0.3:  # 30% шанс ошибки
+            raise Exception("Случайная ошибка")
+        
+        return f"Результат задачи {task_id}"
+    
+    # Попытка выполнения с retry и таймаутом
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        tasks = []
+        for i in range(5):
+            task = resilient_executor_call(
+                unreliable_blocking_task,
+                i,
+                timeout=2.0,
+                max_retries=3,
+                executor=executor
+            )
+            tasks.append(task)
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Задача {i} неудачна: {result}")
+            else:
+                logger.info(f"Задача {i} успешна: {result}")
+
+
 # Функция для запуска всех продвинутых примеров
 async def run_advanced_examples():
     """Запуск всех продвинутых примеров"""
@@ -486,6 +787,18 @@ async def run_advanced_examples():
     
     print("7. Батчевый итератор:")
     await batch_iterator_example()
+    print()
+    
+    print("8. Адаптивный менеджер executor'ов:")
+    await adaptive_executor_example()
+    print()
+    
+    print("9. Динамическое масштабирование executor'ов:")
+    await dynamic_pool_example()
+    print()
+    
+    print("10. Устойчивый вызов с retry и таймаутом:")
+    await resilient_call_example()
     print()
 
 
